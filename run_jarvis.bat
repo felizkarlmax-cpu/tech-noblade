@@ -1,0 +1,1 @@
+@echo off\ncall .venv\\Scripts\\activate\npython jarvis.py\npause\n
