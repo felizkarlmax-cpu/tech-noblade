@@ -86,7 +86,7 @@ class MainActivity : Activity() {
         @JavascriptInterface fun status(): String {
             val json = JSONObject()
             permissionMap.forEach { (name, permission) ->
-                json.put(name, ContextCompat.checkSelfPermission(this@MainActivity, permission) == PackageManager.PERMISSION_GRANTED)
+                json.put(name, checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED)
             }
             json.put("deviceControl", JarvisAccessibilityService.instance != null)
             return json.toString()
