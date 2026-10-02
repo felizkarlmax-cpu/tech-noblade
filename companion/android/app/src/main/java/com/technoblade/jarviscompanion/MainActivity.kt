@@ -10,6 +10,7 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import java.util.Locale
 import android.provider.Settings
 import android.webkit.JavascriptInterface
@@ -25,6 +26,7 @@ class MainActivity : Activity() {
     private val trustedHost = "jarvis-ai-assistant-aulnd6.v2.appdeploy.ai"
     private var speechRecognizer: SpeechRecognizer? = null
     private var handsFreeEnabled = true
+    private var ttsReady = false
     private lateinit var tts: TextToSpeech
 
     private val permissionMap = mapOf(
@@ -52,13 +54,27 @@ class MainActivity : Activity() {
         }
         web.addJavascriptInterface(JarvisBridge(), "JARVIS_NATIVE")
         setContentView(web)
-        tts = TextToSpeech(this) { tts.language = Locale.UK }
+        tts = TextToSpeech(this) { result ->
+            if (result == TextToSpeech.SUCCESS) {
+                tts.language = Locale.UK
+                ttsReady = true
+            }
+        }
+        tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {}
+            override fun onDone(utteranceId: String?) {
+                if (handsFreeEnabled) web.postDelayed({ startListeningOnce() }, 350)
+            }
+            override fun onError(utteranceId: String?) {
+                if (handsFreeEnabled) web.postDelayed({ startListeningOnce() }, 350)
+            }
+        })
         web.loadUrl("https://$trustedHost/")
         web.postDelayed({ startHandsFreeIfPermitted() }, 1200)
     }
 
     inner class JarvisBridge {
-        @JavascriptInterface fun version(): String = "android-companion/0.1.0"
+        @JavascriptInterface fun version(): String = "android-companion/0.2.0"
         @JavascriptInterface fun openUrl(url: String) {
             runOnUiThread {
                 val uri = Uri.parse(url)
@@ -96,7 +112,16 @@ class MainActivity : Activity() {
 
         @JavascriptInterface fun setHandsFree(enabled: Boolean) { handsFreeEnabled = enabled; if (enabled) startHandsFreeIfPermitted() else stopHandsFree() }
 
-        @JavascriptInterface fun speakNative(text: String) { runOnUiThread { tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "jarvis") } }
+        @JavascriptInterface fun speakNative(text: String) {
+            runOnUiThread {
+                stopHandsFree()
+                if (!ttsReady || text.isBlank()) {
+                    if (handsFreeEnabled) web.postDelayed({ startListeningOnce() }, 350)
+                    return@runOnUiThread
+                }
+                tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "jarvis")
+            }
+        }
 
         @JavascriptInterface fun status(): String {
             val json = JSONObject()
@@ -104,6 +129,8 @@ class MainActivity : Activity() {
                 json.put(name, checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED)
             }
             json.put("deviceControl", JarvisAccessibilityService.instance != null)
+            json.put("handsFree", handsFreeEnabled)
+            json.put("ttsReady", ttsReady)
             return json.toString()
         }
 
@@ -128,7 +155,7 @@ class MainActivity : Activity() {
                 override fun onBufferReceived(buffer: ByteArray?) {}
                 override fun onEndOfSpeech() {}
                 override fun onError(error: Int) { if (handsFreeEnabled) web.postDelayed({ startListeningOnce() }, 700) }
-                override fun onResults(results: Bundle?) { handleVoiceResults(results); if (handsFreeEnabled) web.postDelayed({ startListeningOnce() }, 400) }
+                override fun onResults(results: Bundle?) { handleVoiceResults(results); if (handsFreeEnabled && !tts.isSpeaking) web.postDelayed({ startListeningOnce() }, 400) }
                 override fun onPartialResults(partialResults: Bundle?) {}
                 override fun onEvent(eventType: Int, params: Bundle?) {}
             })
@@ -137,7 +164,7 @@ class MainActivity : Activity() {
     }
 
     private fun startListeningOnce() {
-        if (!handsFreeEnabled) return
+        if (!handsFreeEnabled || checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED || tts.isSpeaking) return
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-GB")
@@ -150,9 +177,18 @@ class MainActivity : Activity() {
         val spoken = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim() ?: return
         val match = Regex("\\bjarvis\\b[,:\\s]*(.*)", RegexOption.IGNORE_CASE).find(spoken) ?: return
         val command = match.groupValues.getOrNull(1)?.trim().orEmpty()
-        if (command.isEmpty()) { tts.speak("Yes, Sir?", TextToSpeech.QUEUE_FLUSH, null, "jarvis") ; return }
+        if (command.isEmpty()) { speakAndResume("Yes, Sir?"); return }
         val safe = JSONObject.quote(command)
         runOnUiThread { web.evaluateJavascript("window.JARVIS_NATIVE_COMMAND($safe)", null) }
+    }
+
+    private fun speakAndResume(text: String) {
+        stopHandsFree()
+        if (!ttsReady || text.isBlank()) {
+            if (handsFreeEnabled) web.postDelayed({ startListeningOnce() }, 350)
+            return
+        }
+        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "jarvis")
     }
 
     private fun stopHandsFree() { try { speechRecognizer?.cancel() } catch (_: Exception) {} }
