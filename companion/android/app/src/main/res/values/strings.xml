@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">JARVIS Companion</string>
+    <string name="accessibility_description">User-enabled JARVIS device control for assistive interaction with the phone.</string>
+</resources>
