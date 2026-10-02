@@ -13,8 +13,6 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 import org.json.JSONObject
 
 class MainActivity : Activity() {
@@ -60,8 +58,8 @@ class MainActivity : Activity() {
 
         @JavascriptInterface fun requestPermission(name: String) {
             val permission = permissionMap[name] ?: return
-            if (ContextCompat.checkSelfPermission(this@MainActivity, permission) != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(this@MainActivity, arrayOf(permission), permissionCode(name))
+            if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(permission), permissionCode(name))
             }
         }
 
