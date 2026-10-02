@@ -28,6 +28,8 @@ class MainActivity : Activity() {
     private var handsFreeEnabled = true
     private var ttsReady = false
     private var recognitionActive = false
+    private var usingOnDeviceRecognizer = false
+    private var lastSpeechError = "none"
     private lateinit var tts: TextToSpeech
 
     private val permissionMap = mapOf(
@@ -145,6 +147,11 @@ class MainActivity : Activity() {
             json.put("deviceControl", JarvisAccessibilityService.instance != null)
             json.put("handsFree", handsFreeEnabled)
             json.put("ttsReady", ttsReady)
+            json.put("recognitionAvailable", SpeechRecognizer.isRecognitionAvailable(this))
+            json.put("onDeviceRecognitionAvailable", if (android.os.Build.VERSION.SDK_INT >= 31) SpeechRecognizer.isOnDeviceRecognitionAvailable(this) else false)
+            json.put("recognitionActive", recognitionActive)
+            json.put("recognizer", if (usingOnDeviceRecognizer) "on-device" else "system")
+            json.put("lastSpeechError", lastSpeechError)
             return json.toString()
         }
 
@@ -160,16 +167,28 @@ class MainActivity : Activity() {
     }
 
     private fun startHandsFreeIfPermitted() {
-        if (!handsFreeEnabled || checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED || !SpeechRecognizer.isRecognitionAvailable(this)) return
-        if (speechRecognizer == null) speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).also { recognizer ->
+        if (!handsFreeEnabled || checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            lastSpeechError = "Speech recognition service unavailable"
+            return
+        }
+        if (speechRecognizer == null) {
+            speechRecognizer = if (android.os.Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
+                usingOnDeviceRecognizer = true
+                SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
+            } else {
+                usingOnDeviceRecognizer = false
+                SpeechRecognizer.createSpeechRecognizer(this)
+            }.also { recognizer ->
             recognizer.setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) {}
+                override fun onReadyForSpeech(params: Bundle?) { lastSpeechError = "ready" }
                 override fun onBeginningOfSpeech() {}
                 override fun onRmsChanged(rmsdB: Float) {}
                 override fun onBufferReceived(buffer: ByteArray?) {}
                 override fun onEndOfSpeech() { recognitionActive = false }
                 override fun onError(error: Int) {
                     recognitionActive = false
+                    lastSpeechError = speechErrorName(error)
                     if (handsFreeEnabled) web.postDelayed({ startListeningOnce() }, 900)
                 }
                 override fun onResults(results: Bundle?) {
@@ -188,7 +207,9 @@ class MainActivity : Activity() {
         if (!handsFreeEnabled || checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED || tts.isSpeaking || recognitionActive) return
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-GB")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "en-US")
+            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, usingOnDeviceRecognizer)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
@@ -201,6 +222,21 @@ class MainActivity : Activity() {
             recognitionActive = false
             if (handsFreeEnabled) web.postDelayed({ startListeningOnce() }, 1200)
         }
+    }
+
+    private fun speechErrorName(error: Int): String = when (error) {
+        SpeechRecognizer.ERROR_AUDIO -> "audio"
+        SpeechRecognizer.ERROR_CLIENT -> "client"
+        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "permission"
+        SpeechRecognizer.ERROR_NETWORK -> "network"
+        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "network-timeout"
+        SpeechRecognizer.ERROR_NO_MATCH -> "no-match"
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "recognizer-busy"
+        SpeechRecognizer.ERROR_SERVER -> "server"
+        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "speech-timeout"
+        SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED -> "language-not-supported"
+        SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> "language-unavailable"
+        else -> "error-$error"
     }
 
     private fun handleVoiceResults(results: Bundle?) {
