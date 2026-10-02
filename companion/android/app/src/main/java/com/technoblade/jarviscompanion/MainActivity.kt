@@ -6,13 +6,12 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
-import java.util.Locale
-import android.provider.Settings
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -20,6 +19,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
 import org.json.JSONObject
+import java.util.Locale
 
 class MainActivity : Activity() {
     private lateinit var web: WebView
@@ -42,49 +42,61 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        web = WebView(this)
-        web.settings.javaScriptEnabled = true
-        web.settings.domStorageEnabled = true
-        web.settings.mediaPlaybackRequiresUserGesture = false
-        web.webChromeClient = WebChromeClient()
-        web.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                val host = request.url.host
-                if (host == trustedHost) return false
-                startActivity(Intent(Intent.ACTION_VIEW, request.url))
-                return true
+
+        web = WebView(this).apply {
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.mediaPlaybackRequiresUserGesture = false
+            webChromeClient = WebChromeClient()
+            webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    val host = request.url.host
+                    if (host == trustedHost) return false
+                    startActivity(Intent(Intent.ACTION_VIEW, request.url))
+                    return true
+                }
             }
+            addJavascriptInterface(JarvisBridge(), "JARVIS_NATIVE")
         }
-        web.addJavascriptInterface(JarvisBridge(), "JARVIS_NATIVE")
+
         setContentView(web)
+
         tts = TextToSpeech(this) { result ->
             if (result == TextToSpeech.SUCCESS) {
                 tts.language = Locale.UK
                 ttsReady = true
             }
         }
+
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) {}
+            override fun onStart(utteranceId: String?) = Unit
+
             override fun onDone(utteranceId: String?) {
-                if (handsFreeEnabled) web.postDelayed({ startListeningOnce() }, 350)
+                if (handsFreeEnabled) web.postDelayed({ startListeningOnce() }, 500)
             }
+
             override fun onError(utteranceId: String?) {
-                if (handsFreeEnabled) web.postDelayed({ startListeningOnce() }, 350)
+                if (handsFreeEnabled) web.postDelayed({ startListeningOnce() }, 500)
             }
         })
+
         web.loadUrl("https://$trustedHost/")
+
         web.postDelayed({
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 9001)
             } else {
                 startHandsFreeIfPermitted()
             }
-        }, 1500)
+        }, 1200)
     }
 
     inner class JarvisBridge {
-        @JavascriptInterface fun version(): String = "android-companion/0.2.0"
-        @JavascriptInterface fun openUrl(url: String) {
+        @JavascriptInterface
+        fun version(): String = "android-companion/0.2.1"
+
+        @JavascriptInterface
+        fun openUrl(url: String) {
             runOnUiThread {
                 val uri = Uri.parse(url)
                 if (uri.scheme != "http" && uri.scheme != "https") return@runOnUiThread
@@ -92,24 +104,30 @@ class MainActivity : Activity() {
             }
         }
 
-        @JavascriptInterface fun requestPermission(name: String) {
+        @JavascriptInterface
+        fun requestPermission(name: String) {
             val permission = permissionMap[name] ?: return
             if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(arrayOf(permission), permissionCode(name))
             }
         }
 
-        @JavascriptInterface fun openAccessibilitySettings() {
-            runOnUiThread { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        @JavascriptInterface
+        fun openAccessibilitySettings() {
+            runOnUiThread {
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
         }
 
-        @JavascriptInterface fun openApp(packageName: String) {
+        @JavascriptInterface
+        fun openApp(packageName: String) {
             runOnUiThread {
                 packageManager.getLaunchIntentForPackage(packageName)?.let { startActivity(it) }
             }
         }
 
-        @JavascriptInterface fun pickFile() {
+        @JavascriptInterface
+        fun pickFile() {
             runOnUiThread {
                 val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                     addCategory(Intent.CATEGORY_OPENABLE)
@@ -119,27 +137,34 @@ class MainActivity : Activity() {
             }
         }
 
-        @JavascriptInterface fun setHandsFree(enabled: Boolean) {
+        @JavascriptInterface
+        fun setHandsFree(enabled: Boolean) {
             handsFreeEnabled = enabled
             if (enabled) {
                 if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                     requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 9001)
-                } else startHandsFreeIfPermitted()
-            } else stopHandsFree()
+                } else {
+                    startHandsFreeIfPermitted()
+                }
+            } else {
+                stopHandsFree()
+            }
         }
 
-        @JavascriptInterface fun speakNative(text: String) {
+        @JavascriptInterface
+        fun speakNative(text: String) {
             runOnUiThread {
                 stopHandsFree()
                 if (!ttsReady || text.isBlank()) {
-                    if (handsFreeEnabled) web.postDelayed({ startListeningOnce() }, 350)
+                    if (handsFreeEnabled) web.postDelayed({ startListeningOnce() }, 500)
                     return@runOnUiThread
                 }
                 tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "jarvis")
             }
         }
 
-        @JavascriptInterface fun status(): String {
+        @JavascriptInterface
+        fun status(): String {
             val json = JSONObject()
             permissionMap.forEach { (name, permission) ->
                 json.put(name, checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED)
@@ -147,8 +172,15 @@ class MainActivity : Activity() {
             json.put("deviceControl", JarvisAccessibilityService.instance != null)
             json.put("handsFree", handsFreeEnabled)
             json.put("ttsReady", ttsReady)
-            json.put("recognitionAvailable", SpeechRecognizer.isRecognitionAvailable(this))
-            json.put("onDeviceRecognitionAvailable", if (android.os.Build.VERSION.SDK_INT >= 31) SpeechRecognizer.isOnDeviceRecognitionAvailable(this) else false)
+            json.put("recognitionAvailable", SpeechRecognizer.isRecognitionAvailable(this@MainActivity))
+            json.put(
+                "onDeviceRecognitionAvailable",
+                if (android.os.Build.VERSION.SDK_INT >= 31) {
+                    SpeechRecognizer.isOnDeviceRecognitionAvailable(this@MainActivity)
+                } else {
+                    false
+                }
+            )
             json.put("recognitionActive", recognitionActive)
             json.put("recognizer", if (usingOnDeviceRecognizer) "on-device" else "system")
             json.put("lastSpeechError", lastSpeechError)
@@ -158,53 +190,90 @@ class MainActivity : Activity() {
         private fun permissionCode(name: String): Int = 1000 + name.hashCode().and(0x3FF)
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
             Toast.makeText(this, "JARVIS permission enabled", Toast.LENGTH_SHORT).show()
-            if (permissions.contains(Manifest.permission.RECORD_AUDIO)) startHandsFreeIfPermitted()
+            if (permissions.contains(Manifest.permission.RECORD_AUDIO)) {
+                startHandsFreeIfPermitted()
+            }
+        } else if (permissions.contains(Manifest.permission.RECORD_AUDIO)) {
+            lastSpeechError = "permission"
         }
     }
 
     private fun startHandsFreeIfPermitted() {
-        if (!handsFreeEnabled || checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return
+        if (!handsFreeEnabled ||
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
+        ) return
+
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            lastSpeechError = "Speech recognition service unavailable"
+            lastSpeechError = "recognition-unavailable"
             return
         }
+
         if (speechRecognizer == null) {
-            speechRecognizer = if (android.os.Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
-                usingOnDeviceRecognizer = true
-                SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
-            } else {
-                usingOnDeviceRecognizer = false
-                SpeechRecognizer.createSpeechRecognizer(this)
-            }.also { recognizer ->
-            recognizer.setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) { lastSpeechError = "ready" }
-                override fun onBeginningOfSpeech() {}
-                override fun onRmsChanged(rmsdB: Float) {}
-                override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onEndOfSpeech() { recognitionActive = false }
+            speechRecognizer =
+                if (android.os.Build.VERSION.SDK_INT >= 31 &&
+                    SpeechRecognizer.isOnDeviceRecognitionAvailable(this)
+                ) {
+                    usingOnDeviceRecognizer = true
+                    SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
+                } else {
+                    usingOnDeviceRecognizer = false
+                    SpeechRecognizer.createSpeechRecognizer(this)
+                }
+
+            speechRecognizer?.setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {
+                    lastSpeechError = "ready"
+                }
+
+                override fun onBeginningOfSpeech() = Unit
+                override fun onRmsChanged(rmsdB: Float) = Unit
+                override fun onBufferReceived(buffer: ByteArray?) = Unit
+
+                override fun onEndOfSpeech() {
+                    recognitionActive = false
+                }
+
                 override fun onError(error: Int) {
                     recognitionActive = false
                     lastSpeechError = speechErrorName(error)
-                    if (handsFreeEnabled) web.postDelayed({ startListeningOnce() }, 900)
+                    if (handsFreeEnabled) {
+                        web.postDelayed({ startListeningOnce() }, 1000)
+                    }
                 }
+
                 override fun onResults(results: Bundle?) {
                     recognitionActive = false
                     handleVoiceResults(results)
-                    if (handsFreeEnabled && !tts.isSpeaking) web.postDelayed({ startListeningOnce() }, 500)
+                    if (handsFreeEnabled && !tts.isSpeaking) {
+                        web.postDelayed({ startListeningOnce() }, 500)
+                    }
                 }
-                override fun onPartialResults(partialResults: Bundle?) {}
-                override fun onEvent(eventType: Int, params: Bundle?) {}
+
+                override fun onPartialResults(partialResults: Bundle?) = Unit
+                override fun onEvent(eventType: Int, params: Bundle?) = Unit
             })
         }
+
         startListeningOnce()
     }
 
     private fun startListeningOnce() {
-        if (!handsFreeEnabled || checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED || tts.isSpeaking || recognitionActive) return
+        if (!handsFreeEnabled ||
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED ||
+            tts.isSpeaking ||
+            recognitionActive
+        ) return
+
+        val recognizer = speechRecognizer ?: return
+
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
@@ -215,11 +284,13 @@ class MainActivity : Activity() {
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 300L)
         }
+
         try {
             recognitionActive = true
-            speechRecognizer?.startListening(intent)
+            recognizer.startListening(intent)
         } catch (_: Exception) {
             recognitionActive = false
+            lastSpeechError = "start-failed"
             if (handsFreeEnabled) web.postDelayed({ startListeningOnce() }, 1200)
         }
     }
@@ -240,26 +311,52 @@ class MainActivity : Activity() {
     }
 
     private fun handleVoiceResults(results: Bundle?) {
-        val spoken = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim() ?: return
-        val match = Regex("\\bjarvis\\b[,:\\s]*(.*)", RegexOption.IGNORE_CASE).find(spoken) ?: return
+        val spoken = results
+            ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+            ?.firstOrNull()
+            ?.trim()
+            ?: return
+
+        lastSpeechError = "heard: $spoken"
+
+        val match = Regex("\\bjarvis\\b[,:\\s]*(.*)", RegexOption.IGNORE_CASE).find(spoken)
+            ?: return
+
         val command = match.groupValues.getOrNull(1)?.trim().orEmpty()
-        if (command.isEmpty()) { speakAndResume("Yes, Sir?"); return }
+        if (command.isEmpty()) {
+            speakAndResume("Yes, Sir?")
+            return
+        }
+
         val safe = JSONObject.quote(command)
-        runOnUiThread { web.evaluateJavascript("window.JARVIS_NATIVE_COMMAND($safe)", null) }
+        runOnUiThread {
+            web.evaluateJavascript("window.JARVIS_NATIVE_COMMAND($safe)", null)
+        }
     }
 
     private fun speakAndResume(text: String) {
         stopHandsFree()
         if (!ttsReady || text.isBlank()) {
-            if (handsFreeEnabled) web.postDelayed({ startListeningOnce() }, 350)
+            if (handsFreeEnabled) web.postDelayed({ startListeningOnce() }, 500)
             return
         }
         tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "jarvis")
     }
 
-    private fun stopHandsFree() { recognitionActive = false; try { speechRecognizer?.cancel() } catch (_: Exception) {} }
+    private fun stopHandsFree() {
+        recognitionActive = false
+        try {
+            speechRecognizer?.cancel()
+        } catch (_: Exception) {
+        }
+    }
 
-    override fun onDestroy() { stopHandsFree(); speechRecognizer?.destroy(); tts.shutdown(); super.onDestroy() }
+    override fun onDestroy() {
+        stopHandsFree()
+        speechRecognizer?.destroy()
+        tts.shutdown()
+        super.onDestroy()
+    }
 
     override fun onBackPressed() {
         if (web.canGoBack()) web.goBack() else super.onBackPressed()
